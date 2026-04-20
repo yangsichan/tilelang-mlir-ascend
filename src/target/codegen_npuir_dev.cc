@@ -1958,36 +1958,34 @@ static inline constexpr bool startsWith(std::string_view str,
 ///        %.* = <linalg>.<op> ins(%A_trans) outs(B) -> tensor<>
 ///        or
 ///     %.* = hivm.hir.<op> ins(A) outs(B) -> tensor<>
-template <typename T, typename U>
+template <typename T, auto fn>
 void CodeGenTileLangNPUIRDEV::UnaryVecOpCodegen(const CallNode *op) {
   T npuirop(op->args, this->vmap);
   auto in_data_name = GetVarValue(npuirop.src);
   auto out_data_name = GetVarValue(npuirop.dst);
   auto dims = getBroadcastDim(npuirop.src->shape, npuirop.dst->shape);
-  mlir::Type dst_type = out_data_name.getType();
   auto loc = builder.getUnknownLoc();
   mlir::Value newOpValue;
 
   auto transposeAttr = builder.getDenseI64ArrayAttr({});
   auto broadcastAttr = builder.getDenseI64ArrayAttr(dims);
 
-  if constexpr (startsWith(U::getOperationName(),
-                           mlir::hivm::HIVMDialect::getDialectNamespace())) {
-    // Create HIVM Op
-    auto newOp = builder.create<U>(
-        loc, 
-        mlir::TypeRange{&dst_type, 1}, 
-        in_data_name, 
-        out_data_name, 
-        transposeAttr, 
-        broadcastAttr
-    );
-    newOpValue = newOp->getResult(0);
-  } else {
-    in_data_name = broadcastOrTranspose(in_data_name, out_data_name, 
-                                        broadcastAttr, transposeAttr, builder);
+  in_data_name = broadcastOrTranspose(in_data_name, out_data_name,
+                                      broadcastAttr, transposeAttr, builder);
 
-    newOpValue = builder.create<U>(loc, out_data_name.getType(), in_data_name);
+  if constexpr (std::is_same_v<std::decay_t<decltype(fn)>, mlir::linalg::UnaryFn>) {
+    auto attr = builder.getAttr<mlir::linalg::UnaryFnAttr>(fn);
+    auto fnAttr = builder.getNamedAttr("fun", attr);
+    auto newOp = builder.create<mlir::linalg::ElemwiseUnaryOp>(
+        loc, mlir::ValueRange{in_data_name}, mlir::ValueRange{out_data_name}, fnAttr);
+    newOpValue = newOp->getResult(0);
+  }
+  else if constexpr (std::is_same_v<std::decay_t<decltype(fn)>, hfusion::UnaryFn>) {
+    auto attr = builder.getAttr<hfusion::UnaryFnAttr>(fn);
+    auto fnAttr = builder.getNamedAttr("fun", attr);
+    auto newOp = builder.create<hfusion::ElemwiseUnaryOp>(
+        loc, mlir::ValueRange{in_data_name}, mlir::ValueRange{out_data_name}, fnAttr);
+    newOpValue = newOp->getResult(0);
   }
 
   SetVarValue(npuirop.dst, newOpValue);
@@ -3586,21 +3584,21 @@ mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const CallNode *op) {
   } else if (op->op.same_as(Op::Get("tl.npuir_add"))) {
     CreateHIVMBinaryVectorOp<mlir::arith::AddFOp, mlir::arith::AddIOp>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_exp"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirExp, mlir::math::ExpOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirExp, mlir::linalg::UnaryFn::exp>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_ln"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirLn, mlir::hivm::VLnOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirLn, mlir::linalg::UnaryFn::log>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_relu"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirRelu, mlir::hivm::VReluOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirRelu, hfusion::UnaryFn::relu>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_sqrt"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirSqrt, mlir::hivm::VSqrtOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirSqrt, mlir::linalg::UnaryFn::sqrt>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_rsqrt"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirRsqrt, mlir::hivm::VRsqrtOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirRsqrt, mlir::linalg::UnaryFn::rsqrt>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_abs"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirAbs, mlir::hivm::VAbsOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirAbs, mlir::linalg::UnaryFn::abs>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_rec"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirRec, mlir::hivm::VRecOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirRec, mlir::linalg::UnaryFn::reciprocal>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_not"))) {
-    UnaryVecOpCodegen<tvm::tl::NpuirNot, mlir::hivm::VNotOp>(op);
+    UnaryVecOpCodegen<tvm::tl::NpuirNot, hfusion::UnaryFn::vnot>(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_select"))) {
     VselectCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_cmp"))) {
