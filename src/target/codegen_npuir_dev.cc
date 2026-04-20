@@ -2370,8 +2370,8 @@ void CodeGenTileLangNPUIRDEV::VreduceCodegen(const CallNode *op) {
 
   auto squeezedTy = squeezedInit.getType().cast<mlir::RankedTensorType>();
   auto reduceOp = builder.create<mlir::linalg::ReduceOp>(
-    loc, squeezedTy, src, squeezedInit,
-    builder.getDenseI64ArrayAttr(npuirop.reduce_dims)
+      loc, squeezedTy, src, squeezedInit,
+      builder.getDenseI64ArrayAttr(npuirop.reduce_dims)
   );
 
   {
@@ -2387,40 +2387,77 @@ void CodeGenTileLangNPUIRDEV::VreduceCodegen(const CallNode *op) {
     mlir::Value result;
 
     if (npuirop.reduce_mode == "sum") {
-      if (elemTy.isa<mlir::FloatType>())
+      if (elemTy.isa<mlir::FloatType>()) {
         result = builder.create<mlir::arith::AddFOp>(loc, inputElem, accumElem);
-      else
+      } else {
         result = builder.create<mlir::arith::AddIOp>(loc, inputElem, accumElem);
+      }
     } else if (npuirop.reduce_mode == "max") {
       if (elemTy.isa<mlir::FloatType>()) {
-        result =
-            builder.create<mlir::arith::MaximumFOp>(loc, inputElem, accumElem);
+        result = builder.create<mlir::arith::MaximumFOp>(loc, inputElem, accumElem);
       } else {
         auto intTy = elemTy.cast<mlir::IntegerType>();
         if (intTy.isSigned()) {
-          result =
-              builder.create<mlir::arith::MaxSIOp>(loc, inputElem, accumElem);
+          result = builder.create<mlir::arith::MaxSIOp>(loc, inputElem, accumElem);
         } else {
-          result =
-              builder.create<mlir::arith::MaxUIOp>(loc, inputElem, accumElem);
+          result = builder.create<mlir::arith::MaxUIOp>(loc, inputElem, accumElem);
         }
       }
     } else if (npuirop.reduce_mode == "min") {
       if (elemTy.isa<mlir::FloatType>()) {
-        result =
-            builder.create<mlir::arith::MinimumFOp>(loc, inputElem, accumElem);
+        result = builder.create<mlir::arith::MinimumFOp>(loc, inputElem, accumElem);
       } else {
         auto intTy = elemTy.cast<mlir::IntegerType>();
         if (intTy.isSigned()) {
-          result =
-              builder.create<mlir::arith::MinSIOp>(loc, inputElem, accumElem);
+          result = builder.create<mlir::arith::MinSIOp>(loc, inputElem, accumElem);
         } else {
-          result =
-              builder.create<mlir::arith::MinUIOp>(loc, inputElem, accumElem);
+          result = builder.create<mlir::arith::MinUIOp>(loc, inputElem, accumElem);
         }
       }
+    } else if (npuirop.reduce_mode == "prod") {
+      if (elemTy.isa<mlir::FloatType>()) {
+        result = builder.create<mlir::arith::MulFOp>(loc, inputElem, accumElem);
+      } else {
+        result = builder.create<mlir::arith::MulIOp>(loc, inputElem, accumElem);
+      }
+    } else if (npuirop.reduce_mode == "any" || npuirop.reduce_mode == "ori") {
+      if (elemTy.isa<mlir::FloatType>()) {
+        auto intTy = builder.getIntegerType(elemTy.getIntOrFloatBitWidth());
+        auto inputAsInt = builder.create<mlir::arith::BitcastOp>(loc, intTy, inputElem);
+        auto accumAsInt = builder.create<mlir::arith::BitcastOp>(loc, intTy, accumElem);
+        auto orResult = builder.create<mlir::arith::OrIOp>(loc, inputAsInt, accumAsInt);
+        result = builder.create<mlir::arith::BitcastOp>(loc, elemTy, orResult);
+      } else {
+        result = builder.create<mlir::arith::OrIOp>(loc, inputElem, accumElem);
+      }
+    } else if (npuirop.reduce_mode == "all") {
+      if (elemTy.isa<mlir::FloatType>()) {
+        auto intTy = builder.getIntegerType(elemTy.getIntOrFloatBitWidth());
+        auto inputAsInt = builder.create<mlir::arith::BitcastOp>(loc, intTy, inputElem);
+        auto accumAsInt = builder.create<mlir::arith::BitcastOp>(loc, intTy, accumElem);
+        auto andResult = builder.create<mlir::arith::AndIOp>(loc, inputAsInt, accumAsInt);
+        result = builder.create<mlir::arith::BitcastOp>(loc, elemTy, andResult);
+      } else {
+        result = builder.create<mlir::arith::AndIOp>(loc, inputElem, accumElem);
+      }
+    } else if (npuirop.reduce_mode == "xori") {
+      if (elemTy.isa<mlir::FloatType>()) {
+        auto intTy = builder.getIntegerType(elemTy.getIntOrFloatBitWidth());
+        auto inputAsInt = builder.create<mlir::arith::BitcastOp>(loc, intTy, inputElem);
+        auto accumAsInt = builder.create<mlir::arith::BitcastOp>(loc, intTy, accumElem);
+        auto xorResult = builder.create<mlir::arith::XOrIOp>(loc, inputAsInt, accumAsInt);
+        result = builder.create<mlir::arith::BitcastOp>(loc, elemTy, xorResult);
+      } else {
+        result = builder.create<mlir::arith::XOrIOp>(loc, inputElem, accumElem);
+      }
+    } else if (npuirop.reduce_mode == "none") {
+      result = accumElem;
+    } else {
+      emitError(loc, "unknown reduce_mode: " + npuirop.reduce_mode);
+      return;
     }
 
+    // TODO: max_with_index_left/max_with_index_right/min_with_index_left/min_with_index_right
     builder.create<mlir::linalg::YieldOp>(loc, result);
   }
 
